@@ -3,7 +3,7 @@
  * Plugin Name: WooCommerce Cross-Site Cart Transfer
  * Description: Transfer products from one WooCommerce site to another with cart functionality - No additional file modifications needed
  * Version: 1.0.0
- * Author: Smartify Solutions
+ * Author: Your Name
  */
 
 // Prevent direct access
@@ -19,6 +19,10 @@ class WooCommerce_Cross_Site_Cart {
     
     public function __construct() {
         add_action('init', array($this, 'init'));
+        
+        // تهيئة WooCommerce مبكراً
+        add_action('woocommerce_loaded', array($this, 'woocommerce_loaded'));
+        add_action('plugins_loaded', array($this, 'check_woocommerce'), 20);
         
         // تفعيل جميع الـ hooks المطلوبة
         add_action('admin_menu', array($this, 'admin_menu'));
@@ -55,6 +59,23 @@ class WooCommerce_Cross_Site_Cart {
         
         // تنشيط تلقائي عند التفعيل
         register_activation_hook(__FILE__, array($this, 'plugin_activation'));
+    }
+    
+    public function check_woocommerce() {
+        if (!class_exists('WooCommerce')) {
+            add_action('admin_notices', array($this, 'woocommerce_missing_notice'));
+        }
+    }
+    
+    public function woocommerce_missing_notice() {
+        echo '<div class="notice notice-error"><p><strong>Cross-Site Cart Plugin:</strong> WooCommerce is required but not active. Please install and activate WooCommerce.</p></div>';
+    }
+    
+    public function woocommerce_loaded() {
+        // WooCommerce تم تحميله، يمكن الآن الوصول لجميع functions
+        if (class_exists('WC_Session_Handler') && class_exists('WC_Customer') && class_exists('WC_Cart')) {
+            // كل شيء جاهز
+        }
     }
     
     public function init() {
@@ -172,6 +193,7 @@ class WooCommerce_Cross_Site_Cart {
             update_option('cross_site_api_key', sanitize_text_field($_POST['api_key']));
             update_option('cross_site_api_secret', sanitize_text_field($_POST['api_secret']));
             update_option('cross_site_enabled', isset($_POST['enabled']) ? 1 : 0);
+            update_option('cross_site_ssl_verify', isset($_POST['ssl_verify']) ? 1 : 0);
             
             echo '<div class="notice notice-success"><p>Settings saved! No additional file modifications needed.</p></div>';
         }
@@ -180,12 +202,10 @@ class WooCommerce_Cross_Site_Cart {
         $api_key = get_option('cross_site_api_key', '');
         $api_secret = get_option('cross_site_api_secret', '');
         $enabled = get_option('cross_site_enabled', 0);
+        $ssl_verify = get_option('cross_site_ssl_verify', 1);
         ?>
         <div class="wrap">
             <h1>Cross-Site Cart Settings</h1>
-            <div class="notice notice-info">
-                <p><strong>No File Modifications Required!</strong> This plugin handles everything automatically.</p>
-            </div>
             
             <form method="post">
                 <table class="form-table">
@@ -214,6 +234,13 @@ class WooCommerce_Cross_Site_Cart {
                             <p class="description">WooCommerce REST API Secret from target site</p>
                         </td>
                     </tr>
+                    <tr>
+                        <th scope="row">SSL Verification</th>
+                        <td>
+                            <input type="checkbox" name="ssl_verify" value="1" <?php checked($ssl_verify, 1); ?> />
+                            <p class="description">Uncheck this if you're getting SSL certificate errors (not recommended for production)</p>
+                        </td>
+                    </tr>
                 </table>
                 
                 <h3>Quick Setup Guide</h3>
@@ -221,6 +248,7 @@ class WooCommerce_Cross_Site_Cart {
                     <li>Install this plugin on both sites</li>
                     <li>On the target site: Go to WooCommerce → Settings → Advanced → REST API and create API keys</li>
                     <li>Copy the API keys here</li>
+                    <li>If you get SSL errors, try unchecking "SSL Verification" temporarily</li>
                     <li>Enable the plugin and test!</li>
                 </ol>
                 
@@ -234,7 +262,14 @@ class WooCommerce_Cross_Site_Cart {
                 <p><strong>API Endpoints:</strong> ✓ Automatically registered</p>
                 <p><strong>JavaScript:</strong> ✓ Automatically loaded</p>
                 <p><strong>CSS Styling:</strong> ✓ Automatically applied</p>
+                <p><strong>SSL Verification:</strong> <?php echo $ssl_verify ? '✓ Enabled' : '⚠ Disabled'; ?></p>
             </div>
+            
+            <?php if (!$ssl_verify): ?>
+            <div class="notice notice-warning">
+                <p><strong>Security Warning:</strong> SSL verification is disabled. This is not recommended for production sites.</p>
+            </div>
+            <?php endif; ?>
         </div>
         <?php
     }
@@ -243,6 +278,7 @@ class WooCommerce_Cross_Site_Cart {
         if (!get_option('cross_site_enabled', 0)) {
             return $url;
         }
+        // إرجاع # لمنع الإضافة العادية للسلة
         return '#';
     }
     
@@ -250,7 +286,8 @@ class WooCommerce_Cross_Site_Cart {
         if (!get_option('cross_site_enabled', 0)) {
             return $text;
         }
-        return 'Add to Cart & Transfer';
+        // الحفاظ على النص الأصلي
+        return $text;
     }
     
     public function enqueue_scripts() {
@@ -271,8 +308,8 @@ class WooCommerce_Cross_Site_Cart {
     private function get_inline_javascript() {
         return "
         jQuery(document).ready(function($) {
-            // إخفاء أزرار Add to Cart الافتراضية واستبدالها
-            $('.single_add_to_cart_button, .add_to_cart_button').off('click').on('click', function(e) {
+            // منع الإضافة العادية للسلة وتفعيل التحويل فقط
+            $('.single_add_to_cart_button, .add_to_cart_button, .ajax_add_to_cart').off('click').on('click', function(e) {
                 e.preventDefault();
                 e.stopPropagation();
                 
@@ -284,18 +321,18 @@ class WooCommerce_Cross_Site_Cart {
                 
                 if (!product_id) {
                     alert('Product ID not found');
-                    return;
+                    return false;
                 }
                 
                 // التحقق من المتغيرات للمنتجات المتغيرة
                 if (form.hasClass('variations_form') && !variation_id) {
                     alert('Please select product options before adding to cart.');
-                    return;
+                    return false;
                 }
                 
                 // إظهار loading
                 var originalText = button.text();
-                button.addClass('loading disabled').text('Transferring...');
+                button.addClass('loading disabled').text('Processing...');
                 
                 // جمع بيانات المتغيرات
                 var variation_data = {};
@@ -307,7 +344,7 @@ class WooCommerce_Cross_Site_Cart {
                     }
                 });
                 
-                // إرسال البيانات للتحويل
+                // إرسال البيانات للتحويل مباشرة
                 $.ajax({
                     url: cross_site_ajax.ajax_url,
                     type: 'POST',
@@ -321,7 +358,7 @@ class WooCommerce_Cross_Site_Cart {
                     },
                     success: function(response) {
                         if (response.success) {
-                            // تحويل المستخدم للموقع الثاني
+                            // تحويل المستخدم للموقع الثاني مباشرة
                             window.location.href = response.data.redirect_url;
                         } else {
                             alert('Transfer failed: ' + response.data.message);
@@ -330,10 +367,19 @@ class WooCommerce_Cross_Site_Cart {
                     },
                     error: function(xhr, status, error) {
                         console.error('Transfer failed:', error);
-                        button.removeClass('loading disabled').text('Transfer Failed - Try Again');
+                        button.removeClass('loading disabled').text(originalText);
                         alert('Transfer failed. Please try again.');
                     }
                 });
+                
+                return false;
+            });
+            
+            // منع إرسال نماذج الإضافة للسلة
+            $('form.cart, form.variations_form').on('submit', function(e) {
+                e.preventDefault();
+                $(this).find('.single_add_to_cart_button').trigger('click');
+                return false;
             });
         });
         ";
@@ -518,32 +564,57 @@ class WooCommerce_Cross_Site_Cart {
             'timestamp' => time()
         );
         
-        $response = wp_remote_post($api_url, array(
+        // إعدادات متقدمة للاتصال مع معالجة مشاكل SSL
+        $args = array(
             'body' => json_encode($body),
             'headers' => array(
                 'Content-Type' => 'application/json',
                 'Authorization' => 'Basic ' . base64_encode($this->api_key . ':' . $this->api_secret),
-                'X-Source-Site' => home_url()
+                'X-Source-Site' => home_url(),
+                'User-Agent' => 'Cross-Site-Cart/1.0'
             ),
             'timeout' => 30,
-            'sslverify' => true
-        ));
+            'httpversion' => '1.1',
+            'blocking' => true,
+            'sslverify' => get_option('cross_site_ssl_verify', true)
+        );
+        
+        // إضافة إعدادات SSL متقدمة
+        if (!get_option('cross_site_ssl_verify', true)) {
+            $args['sslverify'] = false;
+            $args['sslcertificates'] = false;
+        }
+        
+        // محاولة أولى مع SSL verification
+        $response = wp_remote_post($api_url, $args);
+        
+        // إذا فشلت بسبب SSL، جرب بدون SSL verification
+        if (is_wp_error($response) && strpos($response->get_error_message(), 'SSL') !== false) {
+            cross_site_log_error('SSL error detected, retrying without SSL verification: ' . $response->get_error_message());
+            
+            $args['sslverify'] = false;
+            $args['sslcertificates'] = false;
+            $response = wp_remote_post($api_url, $args);
+        }
         
         if (is_wp_error($response)) {
+            cross_site_log_error('Transfer failed: ' . $response->get_error_message());
             return array('success' => false, 'message' => $response->get_error_message());
         }
         
         $response_code = wp_remote_retrieve_response_code($response);
-        $body = wp_remote_retrieve_body($response);
+        $response_body = wp_remote_retrieve_body($response);
         
         if ($response_code !== 200) {
-            return array('success' => false, 'message' => 'HTTP Error: ' . $response_code);
+            cross_site_log_error('HTTP Error: ' . $response_code . ' - ' . $response_body);
+            return array('success' => false, 'message' => 'HTTP Error: ' . $response_code . ' - Response: ' . substr($response_body, 0, 200));
         }
         
-        $data = json_decode($body, true);
+        $data = json_decode($response_body, true);
         
         if (json_last_error() !== JSON_ERROR_NONE) {
-            return array('success' => false, 'message' => 'Invalid JSON response');
+            cross_site_log_error('Invalid JSON response: ' . $response_body);
+            return array('success' => false, 'message' => 'Invalid JSON response: ' . json_last_error_msg());
         }
         
         return $data;
@@ -561,6 +632,51 @@ class WooCommerce_Cross_Site_Cart {
             'callback' => array($this, 'test_connection'),
             'permission_callback' => '__return_true'
         ));
+    }
+    
+    // تهيئة WooCommerce للـ REST API
+    private function initialize_woocommerce() {
+        // التأكد من أن WooCommerce محمل
+        if (!class_exists('WooCommerce')) {
+            return false;
+        }
+        
+        // بدء session إذا لم تكن بدأت
+        if (!session_id()) {
+            session_start();
+        }
+        
+        // تهيئة WooCommerce
+        if (!did_action('woocommerce_init')) {
+            do_action('woocommerce_init');
+        }
+        
+        // تهيئة session
+        if (!WC()->session) {
+            WC()->session = new WC_Session_Handler();
+            WC()->session->init();
+        }
+        
+        // تهيئة customer
+        if (!WC()->customer) {
+            WC()->customer = new WC_Customer();
+        }
+        
+        // تهيئة cart مع تنظيف
+        if (!WC()->cart) {
+            WC()->cart = new WC_Cart();
+        }
+        
+        // التأكد من تهيئة cart بشكل صحيح
+        if (WC()->cart && method_exists(WC()->cart, 'get_cart')) {
+            // إنشاء session cookie جديد
+            if (!WC()->session->get_session_cookie()) {
+                WC()->session->set_customer_session_cookie(true);
+            }
+            return true;
+        }
+        
+        return false;
     }
     
     public function verify_api_request($request) {
@@ -583,11 +699,27 @@ class WooCommerce_Cross_Site_Cart {
     
     public function receive_product($request) {
         $data = $request->get_json_params();
+        
+        if (!$data || !isset($data['product_data'])) {
+            return array(
+                'success' => false,
+                'message' => 'Invalid request data'
+            );
+        }
+        
         $product_data = $data['product_data'];
-        $source_site = $data['source_site'];
+        $source_site = $data['source_site'] ?? 'Unknown';
         
         try {
-            // البحث عن المنتج بالـ SKU
+            // تهيئة WooCommerce
+            if (!$this->initialize_woocommerce()) {
+                return array(
+                    'success' => false,
+                    'message' => 'WooCommerce is not available or could not be initialized'
+                );
+            }
+            
+            // البحث عن المنتج بالـ SKU أولاً
             $existing_product_id = null;
             if (!empty($product_data['sku'])) {
                 $existing_product_id = wc_get_product_id_by_sku($product_data['sku']);
@@ -596,42 +728,98 @@ class WooCommerce_Cross_Site_Cart {
             if (!$existing_product_id) {
                 // إنشاء منتج جديد
                 $product_id = $this->create_product_from_data($product_data);
+                if (!$product_id) {
+                    return array(
+                        'success' => false,
+                        'message' => 'Failed to create product'
+                    );
+                }
             } else {
                 $product_id = $existing_product_id;
             }
             
-            // إضافة المنتج للسلة مع البيانات الأصلية
+            // التحقق من صحة المنتج
+            $product = wc_get_product($product_id);
+            if (!$product || !$product->exists()) {
+                return array(
+                    'success' => false,
+                    'message' => 'Product does not exist or is invalid'
+                );
+            }
+            
+            // التأكد من أن المنتج قابل للشراء
+            if (!$product->is_purchasable()) {
+                $product->set_status('publish');
+                $product->save();
+            }
+            
+            // تنظيف cart قبل الإضافة
+            WC()->cart->empty_cart();
+            
+            // إضافة المنتج للسلة
             $cart_item_key = WC()->cart->add_to_cart(
                 $product_id,
-                $product_data['quantity'],
-                $product_data['variation_id'],
-                $product_data['variation_data'],
+                $product_data['quantity'] ?? 1,
+                $product_data['variation_id'] ?? 0,
+                $product_data['variation_data'] ?? array(),
                 array(
                     'source_site' => $source_site,
                     'original_price' => $product_data['price'],
-                    'transfer_meta' => $product_data['meta_data'],
+                    'transfer_meta' => $product_data['meta_data'] ?? array(),
                     'transferred_product' => true
                 )
             );
             
             if ($cart_item_key) {
+                // حفظ session data
+                WC()->session->save_data();
+                
+                // تحديث cart في الـ frontend
+                WC()->cart->calculate_totals();
+                
                 return array(
                     'success' => true,
                     'redirect_url' => wc_get_cart_url(),
                     'message' => 'Product added to cart successfully',
-                    'product_id' => $product_id
+                    'product_id' => $product_id,
+                    'cart_item_key' => $cart_item_key,
+                    'cart_contents_count' => WC()->cart->get_cart_contents_count(),
+                    'cart_total' => WC()->cart->get_cart_total()
                 );
             } else {
+                // إضافة معلومات تشخيصية
+                $cart_errors = array();
+                if (WC()->cart) {
+                    $notices = wc_get_notices('error');
+                    if ($notices) {
+                        foreach ($notices as $notice) {
+                            $cart_errors[] = $notice['notice'];
+                        }
+                        wc_clear_notices();
+                    }
+                }
+                
                 return array(
                     'success' => false,
-                    'message' => 'Failed to add product to cart'
+                    'message' => 'Failed to add product to cart',
+                    'errors' => $cart_errors,
+                    'product_purchasable' => $product->is_purchasable(),
+                    'product_status' => $product->get_status(),
+                    'cart_initialized' => WC()->cart ? true : false
                 );
             }
             
         } catch (Exception $e) {
+            cross_site_log_error('Exception in receive_product: ' . $e->getMessage(), array(
+                'line' => $e->getLine(),
+                'file' => $e->getFile(),
+                'product_data' => $product_data
+            ));
+            
             return array(
                 'success' => false,
-                'message' => 'Error: ' . $e->getMessage()
+                'message' => 'Error: ' . $e->getMessage(),
+                'line' => $e->getLine()
             );
         }
     }
@@ -755,15 +943,25 @@ function cross_site_handle_stock_update($order) {
             $product_id = $item->get_product_id();
             $quantity = $item->get_quantity();
             
-            wp_remote_post($source_site . '/wp-json/cross-site-cart/v1/update-stock', array(
+            $args = array(
                 'body' => json_encode(array(
                     'product_id' => $product_id,
                     'quantity_sold' => $quantity,
                     'order_id' => $order->get_id()
                 )),
                 'headers' => array('Content-Type' => 'application/json'),
-                'timeout' => 15
-            ));
+                'timeout' => 15,
+                'sslverify' => get_option('cross_site_ssl_verify', true)
+            );
+            
+            // إرسال الطلب مع معالجة SSL
+            $response = wp_remote_post($source_site . '/wp-json/cross-site-cart/v1/update-stock', $args);
+            
+            // إذا فشل بسبب SSL، جرب بدون SSL verification
+            if (is_wp_error($response) && strpos($response->get_error_message(), 'SSL') !== false) {
+                $args['sslverify'] = false;
+                wp_remote_post($source_site . '/wp-json/cross-site-cart/v1/update-stock', $args);
+            }
         }
     }
 }
@@ -935,13 +1133,47 @@ function ajax_test_cross_site_connection() {
     
     $test_url = rtrim($target_url, '/') . '/wp-json/cross-site-cart/v1/test-connection';
     
-    $response = wp_remote_get($test_url, array(
-        'timeout' => 10,
-        'sslverify' => true
-    ));
+    // إعدادات الاتصال مع معالجة SSL
+    $args = array(
+        'timeout' => 15,
+        'httpversion' => '1.1',
+        'blocking' => true,
+        'headers' => array(
+            'User-Agent' => 'Cross-Site-Cart-Test/1.0'
+        ),
+        'sslverify' => get_option('cross_site_ssl_verify', true)
+    );
+    
+    // محاولة أولى مع SSL verification
+    $response = wp_remote_get($test_url, $args);
+    
+    // إذا فشلت بسبب SSL، جرب بدون SSL verification
+    if (is_wp_error($response) && strpos($response->get_error_message(), 'SSL') !== false) {
+        $args['sslverify'] = false;
+        $args['sslcertificates'] = false;
+        $response = wp_remote_get($test_url, $args);
+        
+        // إشعار المستخدم بمشكلة SSL
+        if (!is_wp_error($response)) {
+            $response_data = json_decode(wp_remote_retrieve_body($response), true);
+            $response_data['ssl_warning'] = 'Connection successful but SSL verification was disabled due to certificate issues.';
+            wp_send_json_success($response_data);
+        }
+    }
     
     if (is_wp_error($response)) {
-        wp_send_json_error('Connection failed: ' . $response->get_error_message());
+        $error_message = $response->get_error_message();
+        
+        // تحسين رسائل الخطأ
+        if (strpos($error_message, 'SSL') !== false) {
+            $error_message .= ' - Try disabling SSL verification in settings if you\'re using a self-signed certificate.';
+        } elseif (strpos($error_message, 'Connection timed out') !== false) {
+            $error_message .= ' - Check if the target site is accessible and not blocking requests.';
+        } elseif (strpos($error_message, 'Could not resolve host') !== false) {
+            $error_message .= ' - Check if the target URL is correct and the domain exists.';
+        }
+        
+        wp_send_json_error('Connection failed: ' . $error_message);
     }
     
     $response_code = wp_remote_retrieve_response_code($response);
@@ -949,9 +1181,13 @@ function ajax_test_cross_site_connection() {
     
     if ($response_code === 200) {
         $data = json_decode($body, true);
-        wp_send_json_success($data);
+        if ($data) {
+            wp_send_json_success($data);
+        } else {
+            wp_send_json_error('Invalid response format from target site');
+        }
     } else {
-        wp_send_json_error('HTTP Error: ' . $response_code);
+        wp_send_json_error('HTTP Error: ' . $response_code . ' - ' . substr($body, 0, 200));
     }
 }
 
