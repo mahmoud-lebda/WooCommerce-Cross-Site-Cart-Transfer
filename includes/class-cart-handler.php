@@ -29,6 +29,13 @@ class Cross_Site_Cart_Handler {
         
         // Save transfer meta to order items
         add_action('woocommerce_checkout_create_order_line_item', array($this, 'save_transfer_meta_to_order'), 10, 4);
+        
+        // Prevent quantity changes for transferred products
+        add_filter('woocommerce_cart_item_quantity', array($this, 'disable_quantity_change_for_transferred_products'), 10, 3);
+        add_filter('woocommerce_cart_item_remove_link', array($this, 'disable_remove_link_for_transferred_products'), 10, 2);
+        
+        // Add CSS to hide quantity controls
+        add_action('wp_head', array($this, 'add_cart_restrictions_css'));
     }
 
     /**
@@ -70,11 +77,14 @@ class Cross_Site_Cart_Handler {
             WC()->cart = new WC_Cart();
         }
 
-        // Ensure session is started
+        // Ensure session is started and cart is loaded from session
         if (!WC()->session->get_session_cookie()) {
             WC()->session->set_customer_session_cookie(true);
         }
 
+        // Load cart from session
+        WC()->cart->get_cart_from_session();
+        
         return true;
     }
 
@@ -106,11 +116,11 @@ class Cross_Site_Cart_Handler {
             // Ensure product is purchasable
             if (!$product->is_purchasable()) {
                 $product->set_status('publish');
-                $product->set_catalog_visibility('hidden'); // Keep hidden from catalog
+                $product->set_catalog_visibility('hidden');
                 $product->save();
             }
 
-            // Prepare cart item data
+            // Prepare cart item data with original price
             $cart_item_data = array(
                 '_cross_site_transfer' => true,
                 '_cross_site_source' => $product_data['source_site'],
@@ -120,6 +130,10 @@ class Cross_Site_Cart_Handler {
                 '_cross_site_transfer_meta' => $product_data['meta_data'] ?? array()
             );
 
+            // Set the product price to the original price BEFORE adding to cart
+            $product->set_price($product_data['price']);
+            $product->set_regular_price($product_data['price']);
+            
             // Add product to cart
             $cart_item_key = WC()->cart->add_to_cart(
                 $product_id,
@@ -130,7 +144,6 @@ class Cross_Site_Cart_Handler {
             );
 
             if (!$cart_item_key) {
-                // Get WooCommerce notices for better error reporting
                 $notices = wc_get_notices('error');
                 $error_message = 'Failed to add product to cart';
                 
@@ -142,11 +155,22 @@ class Cross_Site_Cart_Handler {
                 throw new Exception($error_message);
             }
 
+            // Force the cart item to use original price
+            $cart_item = WC()->cart->get_cart_item($cart_item_key);
+            if ($cart_item) {
+                $cart_item['data']->set_price($product_data['price']);
+            }
+
             // Calculate totals
             WC()->cart->calculate_totals();
             
             // Save session data
             WC()->session->save_data();
+
+            // Force session update
+            if (method_exists(WC()->session, 'set_customer_session_cookie')) {
+                WC()->session->set_customer_session_cookie(true);
+            }
 
             return array(
                 'success' => true,
@@ -191,18 +215,8 @@ class Cross_Site_Cart_Handler {
      * Create new product from transferred data
      */
     private function create_product_from_data($product_data) {
-        // Determine product type
-        $product_type = 'simple';
-        if (!empty($product_data['variation_id'])) {
-            $product_type = 'variable';
-        }
-
         // Create product object
-        if ($product_type === 'variable') {
-            $product = new WC_Product_Variable();
-        } else {
-            $product = new WC_Product_Simple();
-        }
+        $product = new WC_Product_Simple();
 
         // Set basic product data
         $product->set_name($product_data['name']);
@@ -212,8 +226,8 @@ class Cross_Site_Cart_Handler {
         $product->set_price($product_data['price']);
         $product->set_regular_price($product_data['price']);
         $product->set_status('publish');
-        $product->set_catalog_visibility('hidden'); // Hide from catalog searches
-        $product->set_virtual(true); // Mark as virtual to avoid shipping issues
+        $product->set_catalog_visibility('hidden');
+        $product->set_virtual(true);
 
         // Set dimensions if provided
         if (!empty($product_data['weight'])) {
@@ -248,120 +262,7 @@ class Cross_Site_Cart_Handler {
         update_post_meta($product_id, '_cross_site_source_site', $product_data['source_site']);
         update_post_meta($product_id, '_cross_site_created', current_time('mysql'));
 
-        // Handle categories if provided
-        if (!empty($product_data['categories'])) {
-            $this->assign_product_categories($product_id, $product_data['categories']);
-        }
-
-        // Handle images if provided
-        if (!empty($product_data['images'])) {
-            $this->assign_product_images($product_id, $product_data['images']);
-        }
-
         return $product_id;
-    }
-
-    /**
-     * Assign categories to product
-     */
-    private function assign_product_categories($product_id, $categories) {
-        $term_ids = array();
-        
-        foreach ($categories as $category_name) {
-            if (empty($category_name)) continue;
-            
-            // Check if category exists
-            $term = get_term_by('name', $category_name, 'product_cat');
-            
-            if (!$term) {
-                // Create category if it doesn't exist
-                $term_data = wp_insert_term($category_name, 'product_cat');
-                if (!is_wp_error($term_data)) {
-                    $term_ids[] = $term_data['term_id'];
-                }
-            } else {
-                $term_ids[] = $term->term_id;
-            }
-        }
-        
-        if (!empty($term_ids)) {
-            wp_set_object_terms($product_id, $term_ids, 'product_cat');
-        }
-    }
-
-    /**
-     * Assign images to product
-     */
-    private function assign_product_images($product_id, $images) {
-        $gallery_ids = array();
-        $featured_image_id = null;
-        
-        foreach ($images as $index => $image) {
-            if (empty($image['url'])) continue;
-            
-            // Download and attach image
-            $attachment_id = $this->download_and_attach_image($image['url'], $product_id, $image['alt'] ?? '');
-            
-            if ($attachment_id) {
-                if ($index === 0) {
-                    $featured_image_id = $attachment_id;
-                } else {
-                    $gallery_ids[] = $attachment_id;
-                }
-            }
-        }
-        
-        // Set featured image
-        if ($featured_image_id) {
-            set_post_thumbnail($product_id, $featured_image_id);
-        }
-        
-        // Set gallery images
-        if (!empty($gallery_ids)) {
-            update_post_meta($product_id, '_product_image_gallery', implode(',', $gallery_ids));
-        }
-    }
-
-    /**
-     * Download and attach image to product
-     */
-    private function download_and_attach_image($image_url, $product_id, $alt_text = '') {
-        require_once(ABSPATH . 'wp-admin/includes/media.php');
-        require_once(ABSPATH . 'wp-admin/includes/file.php');
-        require_once(ABSPATH . 'wp-admin/includes/image.php');
-
-        try {
-            // Download image
-            $tmp = download_url($image_url);
-            
-            if (is_wp_error($tmp)) {
-                return false;
-            }
-
-            // Get file info
-            $file_array = array(
-                'name' => basename($image_url),
-                'tmp_name' => $tmp
-            );
-
-            // Upload image
-            $attachment_id = media_handle_sideload($file_array, $product_id);
-
-            if (is_wp_error($attachment_id)) {
-                @unlink($tmp);
-                return false;
-            }
-
-            // Set alt text
-            if ($alt_text) {
-                update_post_meta($attachment_id, '_wp_attachment_image_alt', $alt_text);
-            }
-
-            return $attachment_id;
-
-        } catch (Exception $e) {
-            return false;
-        }
     }
 
     /**
@@ -391,17 +292,6 @@ class Cross_Site_Cart_Handler {
             );
         }
 
-        if (isset($cart_item['_cross_site_transfer_meta']) && is_array($cart_item['_cross_site_transfer_meta'])) {
-            foreach ($cart_item['_cross_site_transfer_meta'] as $key => $value) {
-                if (!empty($value) && is_string($value) && strlen($value) < 100) {
-                    $item_data[] = array(
-                        'name' => ucfirst(str_replace('_', ' ', $key)),
-                        'value' => esc_html($value)
-                    );
-                }
-            }
-        }
-
         return $item_data;
     }
 
@@ -414,10 +304,71 @@ class Cross_Site_Cart_Handler {
             $item->add_meta_data('_cross_site_original_price', $values['_cross_site_original_price'], true);
             $item->add_meta_data('_cross_site_original_id', $values['_cross_site_original_id'], true);
             $item->add_meta_data('_cross_site_transfer_time', $values['_cross_site_transfer_time'], true);
-            
-            if (!empty($values['_cross_site_transfer_meta'])) {
-                $item->add_meta_data('_cross_site_transfer_meta', $values['_cross_site_transfer_meta'], true);
+        }
+    }
+
+    /**
+     * Disable quantity changes for transferred products
+     */
+    public function disable_quantity_change_for_transferred_products($product_quantity, $cart_item_key, $cart_item) {
+        if (isset($cart_item['_cross_site_transfer']) && $cart_item['_cross_site_transfer']) {
+            return '<span class="transferred-quantity">' . $cart_item['quantity'] . '</span>';
+        }
+        return $product_quantity;
+    }
+
+    /**
+     * Disable remove link for transferred products
+     */
+    public function disable_remove_link_for_transferred_products($remove_link, $cart_item_key) {
+        $cart_item = WC()->cart->get_cart_item($cart_item_key);
+        
+        if (isset($cart_item['_cross_site_transfer']) && $cart_item['_cross_site_transfer']) {
+            return '';
+        }
+        return $remove_link;
+    }
+
+    /**
+     * Add CSS to restrict cart modifications
+     */
+    public function add_cart_restrictions_css() {
+        if (is_cart()) {
+            ?>
+            <style>
+            .transferred-quantity {
+                font-weight: bold;
+                color: #666;
+                background: #f0f0f0;
+                padding: 8px 12px;
+                border-radius: 4px;
+                display: inline-block;
             }
+            
+            .cart_item[data-transferred="true"]::after {
+                content: "⚠️ This product was transferred from another site. Quantity cannot be changed.";
+                display: block;
+                font-size: 12px;
+                color: #856404;
+                background: #fff3cd;
+                border: 1px solid #ffeaa7;
+                padding: 8px 12px;
+                border-radius: 4px;
+                margin-top: 10px;
+            }
+            </style>
+            
+            <script>
+            jQuery(document).ready(function($) {
+                $('.cart_item').each(function() {
+                    var $row = $(this);
+                    if ($row.find('.cross-site-transfer-source').length > 0) {
+                        $row.attr('data-transferred', 'true');
+                    }
+                });
+            });
+            </script>
+            <?php
         }
     }
 
@@ -448,48 +399,7 @@ class Cross_Site_Cart_Handler {
     }
 
     /**
-     * Validate cart before checkout
-     */
-    public function validate_cart() {
-        if (!WC()->cart || WC()->cart->is_empty()) {
-            return array(
-                'valid' => false,
-                'message' => 'Cart is empty'
-            );
-        }
-
-        $errors = array();
-        
-        foreach (WC()->cart->get_cart() as $cart_item) {
-            $product = $cart_item['data'];
-            
-            // Check if product exists and is purchasable
-            if (!$product || !$product->exists()) {
-                $errors[] = 'Product no longer exists';
-                continue;
-            }
-            
-            if (!$product->is_purchasable()) {
-                $errors[] = sprintf('Product "%s" is not purchasable', $product->get_name());
-                continue;
-            }
-            
-            // Check stock if managed
-            if ($product->managing_stock()) {
-                if (!$product->has_enough_stock($cart_item['quantity'])) {
-                    $errors[] = sprintf('Not enough stock for product "%s"', $product->get_name());
-                }
-            }
-        }
-
-        return array(
-            'valid' => empty($errors),
-            'errors' => $errors
-        );
-    }
-
-    /**
-     * Clear expired cart sessions
+     * Clean up expired cart sessions
      */
     public static function cleanup_expired_sessions() {
         global $wpdb;
@@ -515,3 +425,6 @@ class Cross_Site_Cart_Handler {
         }
     }
 }
+
+// Schedule cleanup
+add_action('cross_site_cart_cleanup', array('Cross_Site_Cart_Handler', 'cleanup_expired_sessions'));

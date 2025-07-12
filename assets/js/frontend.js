@@ -173,13 +173,8 @@ jQuery(document).ready(function($) {
             this.setButtonLoading($button, false);
 
             if (response.success && response.data && response.data.redirect_url) {
-                // Show success message briefly
-                this.showSuccess('Product transferred successfully! Redirecting...');
-                
-                // Redirect to target site
-                setTimeout(function() {
-                    window.location.href = response.data.redirect_url;
-                }, 1000);
+                // Redirect immediately without showing success message
+                window.location.href = response.data.redirect_url;
             } else {
                 var message = response.data && response.data.message ? 
                              response.data.message : 

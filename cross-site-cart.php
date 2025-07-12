@@ -163,19 +163,19 @@ class Cross_Site_Cart_Plugin {
 
         $charset_collate = $wpdb->get_charset_collate();
 
-        // Transfer logs table
+        // Transfer logs table - Updated structure
         $table_name = $wpdb->prefix . 'cross_site_transfers';
         $sql = "CREATE TABLE $table_name (
             id mediumint(9) NOT NULL AUTO_INCREMENT,
             source_product_id mediumint(9) NOT NULL,
-            target_product_id mediumint(9),
+            target_product_id mediumint(9) DEFAULT NULL,
             transfer_data longtext NOT NULL,
             transfer_status varchar(20) DEFAULT 'pending',
-            source_site varchar(255),
-            target_site varchar(255),
+            source_site varchar(255) DEFAULT NULL,
+            target_site varchar(255) DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP,
-            completed_at datetime,
-            error_message text,
+            completed_at datetime DEFAULT NULL,
+            error_message text DEFAULT NULL,
             PRIMARY KEY (id),
             KEY source_product_id (source_product_id),
             KEY transfer_status (transfer_status),
@@ -184,6 +184,38 @@ class Cross_Site_Cart_Plugin {
 
         require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
         dbDelta($sql);
+        
+        // Update table if it exists but missing columns
+        $this->update_database_tables();
+    }
+
+    /**
+     * Update existing database tables to add missing columns
+     */
+    private function update_database_tables() {
+        global $wpdb;
+        
+        $table_name = $wpdb->prefix . 'cross_site_transfers';
+        
+        // Check if table exists
+        $table_exists = $wpdb->get_var($wpdb->prepare("SHOW TABLES LIKE %s", $table_name));
+        
+        if ($table_exists) {
+            // Add missing columns if they don't exist
+            $columns = $wpdb->get_col("SHOW COLUMNS FROM {$table_name}");
+            
+            if (!in_array('source_site', $columns)) {
+                $wpdb->query("ALTER TABLE {$table_name} ADD COLUMN source_site varchar(255) DEFAULT NULL");
+            }
+            
+            if (!in_array('target_site', $columns)) {
+                $wpdb->query("ALTER TABLE {$table_name} ADD COLUMN target_site varchar(255) DEFAULT NULL");
+            }
+            
+            if (!in_array('error_message', $columns)) {
+                $wpdb->query("ALTER TABLE {$table_name} ADD COLUMN error_message text DEFAULT NULL");
+            }
+        }
     }
 
     /**

@@ -41,6 +41,9 @@ class Cross_Site_Cart_Frontend {
         
         // Add back button on target site
         add_action('woocommerce_thankyou', array($this, 'add_back_button'));
+        
+        // Ensure cart is loaded properly on target site
+        add_action('init', array($this, 'ensure_cart_loaded_on_target_site'));
     }
 
     /**
@@ -130,11 +133,11 @@ class Cross_Site_Cart_Frontend {
             wp_send_json_error(array('message' => 'Security check failed'));
         }
 
-        // Get product data
-        $product_id = intval($_POST['product_id']);
-        $quantity = intval($_POST['quantity']) ?: 1;
-        $variation_id = intval($_POST['variation_id']) ?: 0;
-        $variation_data = $_POST['variation_data'] ?: array();
+        // Get product data with proper defaults
+        $product_id = intval($_POST['product_id'] ?? 0);
+        $quantity = intval($_POST['quantity'] ?? 1);
+        $variation_id = intval($_POST['variation_id'] ?? 0);
+        $variation_data = isset($_POST['variation_data']) && is_array($_POST['variation_data']) ? $_POST['variation_data'] : array();
 
         // Validate product
         $product = wc_get_product($product_id);
