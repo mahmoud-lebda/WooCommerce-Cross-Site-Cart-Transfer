@@ -1,0 +1,415 @@
+/**
+ * Cross-Site Cart Transfer Frontend Styles
+ */
+
+/* Transfer Info Notice */
+.cross-site-transfer-info {
+    margin: 20px 0;
+}
+
+.transfer-notice {
+    display: flex;
+    align-items: center;
+    background: linear-gradient(135deg, #e8f4f8 0%, #f0f8f0 100%);
+    border: 1px solid #b8d4ea;
+    border-left: 4px solid #00a0d2;
+    padding: 15px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    color: #333;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.transfer-icon {
+    font-size: 18px;
+    margin-right: 12px;
+    animation: rotate 2s linear infinite;
+}
+
+@keyframes rotate {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.transfer-text {
+    flex: 1;
+    line-height: 1.4;
+}
+
+/* Loading States */
+.loading {
+    opacity: 0.6 !important;
+    cursor: wait !important;
+    pointer-events: none !important;
+    position: relative;
+}
+
+.loading::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: 20px;
+    height: 20px;
+    margin: -10px 0 0 -10px;
+    border: 2px solid #ccc;
+    border-top: 2px solid #333;
+    border-radius: 50%;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+/* Button States */
+.add_to_cart_button,
+.single_add_to_cart_button {
+    transition: all 0.3s ease;
+    position: relative;
+    overflow: hidden;
+}
+
+.add_to_cart_button:hover,
+.single_add_to_cart_button:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+}
+
+.add_to_cart_button.disabled,
+.single_add_to_cart_button.disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+    transform: none;
+    box-shadow: none;
+}
+
+/* Notices */
+.cross-site-notice {
+    display: flex;
+    align-items: center;
+    padding: 15px 20px;
+    margin: 15px 0;
+    border-radius: 6px;
+    font-size: 14px;
+    position: relative;
+    animation: slideInDown 0.3s ease-out;
+}
+
+@keyframes slideInDown {
+    from {
+        opacity: 0;
+        transform: translateY(-20px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.cross-site-notice-success {
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
+    border-left: 4px solid #28a745;
+}
+
+.cross-site-notice-error {
+    background-color: #f8d7da;
+    border: 1px solid #f5c6cb;
+    color: #721c24;
+    border-left: 4px solid #dc3545;
+}
+
+.cross-site-notice .notice-icon {
+    margin-right: 12px;
+    font-weight: bold;
+    font-size: 16px;
+    flex-shrink: 0;
+}
+
+.cross-site-notice .notice-message {
+    flex: 1;
+    line-height: 1.4;
+}
+
+.cross-site-notice .notice-dismiss {
+    background: none;
+    border: none;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 0;
+    margin-left: 15px;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+    flex-shrink: 0;
+}
+
+.cross-site-notice .notice-dismiss:hover {
+    opacity: 1;
+}
+
+/* Back Button on Thank You Page */
+.cross-site-back-button {
+    margin: 30px 0;
+    text-align: center;
+}
+
+.back-button-container {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+    padding: 30px;
+    border-radius: 15px;
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.1);
+    max-width: 500px;
+    margin: 0 auto;
+}
+
+.back-button-container h3 {
+    color: white;
+    margin: 0 0 15px 0;
+    font-size: 24px;
+    font-weight: 600;
+}
+
+.back-button-container p {
+    color: rgba(255, 255, 255, 0.9);
+    margin: 0 0 25px 0;
+    font-size: 16px;
+}
+
+.button.back-to-source {
+    background: white !important;
+    color: #333 !important;
+    padding: 15px 30px !important;
+    border-radius: 25px !important;
+    text-decoration: none !important;
+    font-weight: 600 !important;
+    font-size: 16px !important;
+    border: none !important;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2) !important;
+    transition: all 0.3s ease !important;
+    display: inline-block !important;
+}
+
+.button.back-to-source:hover {
+    transform: translateY(-3px) !important;
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.3) !important;
+    color: #333 !important;
+}
+
+/* Statistics Display */
+.cross-site-stats-display {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+    margin: 20px 0;
+}
+
+.cross-site-stats-display .stat-item {
+    background: #f8f9fa;
+    border: 1px solid #e9ecef;
+    padding: 20px;
+    border-radius: 8px;
+    text-align: center;
+    flex: 1;
+    min-width: 150px;
+    transition: all 0.3s ease;
+}
+
+.cross-site-stats-display .stat-item:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+}
+
+.cross-site-stats-display .stat-number {
+    display: block;
+    font-size: 28px;
+    font-weight: bold;
+    color: #0073aa;
+    margin-bottom: 8px;
+    line-height: 1;
+}
+
+.cross-site-stats-display .stat-label {
+    display: block;
+    font-size: 12px;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-weight: 500;
+}
+
+/* Cart Transfer Meta */
+.cross-site-transfer-source {
+    display: inline-flex;
+    align-items: center;
+    background: #e8f4f8;
+    color: #0073aa;
+    padding: 4px 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+/* Mobile Responsiveness */
+@media (max-width: 768px) {
+    .transfer-notice {
+        flex-direction: column;
+        text-align: center;
+        padding: 15px;
+    }
+    
+    .transfer-icon {
+        margin-right: 0;
+        margin-bottom: 8px;
+    }
+    
+    .cross-site-notice {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .cross-site-notice .notice-icon {
+        margin-right: 0;
+        margin-bottom: 8px;
+    }
+    
+    .cross-site-notice .notice-dismiss {
+        margin-left: 0;
+        margin-top: 10px;
+    }
+    
+    .cross-site-stats-display {
+        flex-direction: column;
+    }
+    
+    .back-button-container {
+        margin: 20px;
+        padding: 20px;
+    }
+    
+    .back-button-container h3 {
+        font-size: 20px;
+    }
+    
+    .button.back-to-source {
+        padding: 12px 25px !important;
+        font-size: 14px !important;
+    }
+}
+
+@media (max-width: 480px) {
+    .transfer-notice {
+        padding: 12px;
+        font-size: 13px;
+    }
+    
+    .cross-site-notice {
+        padding: 12px;
+        font-size: 13px;
+        margin: 10px 0;
+    }
+    
+    .cross-site-stats-display .stat-item {
+        padding: 15px;
+        min-width: 120px;
+    }
+    
+    .cross-site-stats-display .stat-number {
+        font-size: 24px;
+    }
+}
+
+/* RTL Support */
+[dir="rtl"] .transfer-icon {
+    margin-right: 0;
+    margin-left: 12px;
+}
+
+[dir="rtl"] .cross-site-notice .notice-icon {
+    margin-right: 0;
+    margin-left: 12px;
+}
+
+[dir="rtl"] .cross-site-notice .notice-dismiss {
+    margin-left: 0;
+    margin-right: 15px;
+}
+
+/* High Contrast Mode */
+@media (prefers-contrast: high) {
+    .transfer-notice {
+        border-width: 2px;
+    }
+    
+    .cross-site-notice {
+        border-width: 2px;
+    }
+    
+    .cross-site-stats-display .stat-item {
+        border-width: 2px;
+    }
+}
+
+/* Reduced Motion */
+@media (prefers-reduced-motion: reduce) {
+    .transfer-icon {
+        animation: none;
+    }
+    
+    .loading::after {
+        animation: none;
+    }
+    
+    .add_to_cart_button,
+    .single_add_to_cart_button,
+    .cross-site-notice,
+    .cross-site-stats-display .stat-item {
+        transition: none;
+    }
+    
+    .add_to_cart_button:hover,
+    .single_add_to_cart_button:hover,
+    .cross-site-stats-display .stat-item:hover,
+    .button.back-to-source:hover {
+        transform: none;
+    }
+}
+
+/* Dark Mode Support */
+@media (prefers-color-scheme: dark) {
+    .transfer-notice {
+        background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+        color: #ecf0f1;
+        border-color: #34495e;
+    }
+    
+    .cross-site-notice-success {
+        background-color: #1e3a2e;
+        border-color: #2d5a3d;
+        color: #a8d5a8;
+    }
+    
+    .cross-site-notice-error {
+        background-color: #3e1e1e;
+        border-color: #5a2d2d;
+        color: #d5a8a8;
+    }
+    
+    .cross-site-stats-display .stat-item {
+        background: #2c3e50;
+        border-color: #34495e;
+        color: #ecf0f1;
+    }
+    
+    .cross-site-stats-display .stat-number {
+        color: #3498db;
+    }
+    
+    .cross-site-transfer-source {
+        background: #2c3e50;
+        color: #3498db;
+    }
+}

@@ -1,10 +1,8 @@
 <?php
 /**
  * Security Functions for Cross-Site Cart Transfer
- * ملف الحماية والأمان للـ Plugin
  */
 
-// منع الوصول المباشر
 if (!defined('ABSPATH')) {
     exit;
 }
@@ -16,91 +14,140 @@ class Cross_Site_Cart_Security {
     private $rate_limit_threshold;
     
     public function __construct() {
-        $this->encryption_key = get_option('cross_site_encryption_key', wp_salt());
-        $this->allowed_ips = get_option('cross_site_allowed_ips', array());
-        $this->rate_limit_threshold = get_option('cross_site_rate_limit', 100);
-        
+        // Don't initialize here - wait for WordPress to be ready
+        add_action('init', array($this, 'init_security'), 1);
         add_action('rest_api_init', array($this, 'add_security_headers'));
         add_filter('rest_pre_dispatch', array($this, 'check_security'), 10, 3);
-        add_action('init', array($this, 'generate_encryption_key'));
     }
     
-    // إضافة headers الأمان
+    /**
+     * Initialize security after WordPress is loaded
+     */
+    public function init_security() {
+        $this->encryption_key = $this->get_encryption_key();
+        $this->allowed_ips = Cross_Site_Cart_Plugin::get_option('allowed_ips', array());
+        $this->rate_limit_threshold = Cross_Site_Cart_Plugin::get_option('rate_limit', 100);
+    }
+    
+    /**
+     * Get or create encryption key safely
+     */
+    private function get_encryption_key() {
+        $key = Cross_Site_Cart_Plugin::get_option('encryption_key');
+        
+        if (empty($key)) {
+            // Use WordPress constants if available, otherwise generate
+            if (defined('AUTH_SALT') && defined('SECURE_AUTH_SALT')) {
+                $key = hash('sha256', AUTH_SALT . SECURE_AUTH_SALT);
+            } else {
+                $key = wp_generate_password(64, true, true);
+            }
+            Cross_Site_Cart_Plugin::update_option('encryption_key', $key);
+        }
+        
+        return $key;
+    }
+    
+    /**
+     * Add security headers
+     */
     public function add_security_headers() {
-        header('X-Content-Type-Options: nosniff');
-        header('X-Frame-Options: SAMEORIGIN');
-        header('X-XSS-Protection: 1; mode=block');
-        header('Referrer-Policy: strict-origin-when-cross-origin');
+        if (!headers_sent()) {
+            header('X-Content-Type-Options: nosniff');
+            header('X-Frame-Options: SAMEORIGIN');
+            header('X-XSS-Protection: 1; mode=block');
+            header('Referrer-Policy: strict-origin-when-cross-origin');
+        }
     }
     
-    // فحص الأمان قبل معالجة الطلبات
+    /**
+     * Check security before processing requests
+     */
     public function check_security($result, $server, $request) {
         $route = $request->get_route();
         
-        // فحص الطلبات المتعلقة بـ Plugin فقط
+        // Only check our plugin routes
         if (strpos($route, '/cross-site-cart/') === false) {
             return $result;
         }
         
-        // فحص IP Address
+        // Initialize if not done yet
+        if (empty($this->encryption_key)) {
+            $this->init_security();
+        }
+        
+        // Check IP whitelist
         if (!$this->check_ip_whitelist()) {
+            $this->log_security_event('ip_blocked', array('ip' => $this->get_client_ip()));
             return new WP_Error('forbidden_ip', 'Access denied from this IP address', array('status' => 403));
         }
         
-        // فحص Rate Limiting
+        // Check rate limiting
         if (!$this->check_rate_limit()) {
+            $this->log_security_event('rate_limit_exceeded', array('ip' => $this->get_client_ip()));
             return new WP_Error('rate_limit_exceeded', 'Rate limit exceeded', array('status' => 429));
         }
         
-        // فحص التوقيع
-        if (!$this->verify_request_signature($request)) {
-            return new WP_Error('invalid_signature', 'Invalid request signature', array('status' => 401));
+        // Check if IP is banned
+        if ($this->is_ip_banned($this->get_client_ip())) {
+            $this->log_security_event('banned_ip_attempt', array('ip' => $this->get_client_ip()));
+            return new WP_Error('ip_banned', 'IP address is temporarily banned', array('status' => 403));
         }
         
         return $result;
     }
     
-    // فحص IP Whitelist
+    /**
+     * Check IP whitelist
+     */
     private function check_ip_whitelist() {
         if (empty($this->allowed_ips)) {
-            return true; // إذا لم يتم تحديد IPs، السماح لجميع الطلبات
+            return true; // Allow all if no restrictions
         }
         
         $client_ip = $this->get_client_ip();
         return in_array($client_ip, $this->allowed_ips);
     }
     
-    // الحصول على IP Address الحقيقي
+    /**
+     * Get real client IP address
+     */
     private function get_client_ip() {
         $ip_headers = array(
-            'HTTP_CF_CONNECTING_IP',
-            'HTTP_X_FORWARDED_FOR',
-            'HTTP_X_FORWARDED',
-            'HTTP_X_CLUSTER_CLIENT_IP',
-            'HTTP_FORWARDED_FOR',
-            'HTTP_FORWARDED',
-            'REMOTE_ADDR'
+            'HTTP_CF_CONNECTING_IP',     // CloudFlare
+            'HTTP_X_FORWARDED_FOR',      // Load balancer/proxy
+            'HTTP_X_FORWARDED',          // Proxy
+            'HTTP_X_CLUSTER_CLIENT_IP',  // Cluster
+            'HTTP_FORWARDED_FOR',        // Proxy
+            'HTTP_FORWARDED',            // Proxy
+            'REMOTE_ADDR'                // Standard
         );
         
         foreach ($ip_headers as $header) {
             if (!empty($_SERVER[$header])) {
                 $ip = $_SERVER[$header];
+                
+                // Handle comma-separated IPs
                 if (strpos($ip, ',') !== false) {
                     $ip = trim(explode(',', $ip)[0]);
                 }
+                
+                // Validate IP
                 if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
                     return $ip;
                 }
             }
         }
         
-        return $_SERVER['REMOTE_ADDR'] ?? '';
+        return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
     }
     
-    // فحص Rate Limiting
+    /**
+     * Check rate limiting
+     */
     private function check_rate_limit() {
         $client_ip = $this->get_client_ip();
-        $cache_key = 'rate_limit_' . md5($client_ip);
+        $cache_key = 'cross_site_rate_limit_' . md5($client_ip);
         
         $requests = get_transient($cache_key) ?: 0;
         
@@ -108,12 +155,14 @@ class Cross_Site_Cart_Security {
             return false;
         }
         
-        set_transient($cache_key, $requests + 1, 3600); // ساعة واحدة
+        set_transient($cache_key, $requests + 1, HOUR_IN_SECONDS);
         return true;
     }
     
-    // التحقق من توقيع الطلب
-    private function verify_request_signature($request) {
+    /**
+     * Verify request signature
+     */
+    public function verify_request_signature($request) {
         $signature = $request->get_header('X-Signature');
         if (!$signature) {
             return false;
@@ -122,8 +171,8 @@ class Cross_Site_Cart_Security {
         $body = $request->get_body();
         $timestamp = $request->get_header('X-Timestamp');
         
-        // التحقق من صحة الوقت (منع Replay Attacks)
-        if (!$timestamp || abs(time() - $timestamp) > 300) { // 5 دقائق
+        // Check timestamp (prevent replay attacks)
+        if (!$timestamp || abs(time() - $timestamp) > 300) { // 5 minutes
             return false;
         }
         
@@ -132,39 +181,52 @@ class Cross_Site_Cart_Security {
         return hash_equals($expected_signature, $signature);
     }
     
-    // إنشاء مفتاح التشفير
-    public function generate_encryption_key() {
-        if (!get_option('cross_site_encryption_key')) {
-            $key = wp_generate_password(64, true, true);
-            update_option('cross_site_encryption_key', $key);
-        }
-    }
-    
-    // تشفير البيانات
+    /**
+     * Encrypt data
+     */
     public function encrypt_data($data) {
+        if (!function_exists('openssl_encrypt')) {
+            return base64_encode(wp_json_encode($data)); // Fallback
+        }
+        
         $method = 'AES-256-CBC';
         $iv = openssl_random_pseudo_bytes(openssl_cipher_iv_length($method));
-        $encrypted = openssl_encrypt(json_encode($data), $method, $this->encryption_key, 0, $iv);
+        $encrypted = openssl_encrypt(wp_json_encode($data), $method, $this->encryption_key, 0, $iv);
         
         return base64_encode($encrypted . '::' . $iv);
     }
     
-    // فك تشفير البيانات
+    /**
+     * Decrypt data
+     */
     public function decrypt_data($encrypted_data) {
-        $method = 'AES-256-CBC';
-        list($encrypted, $iv) = explode('::', base64_decode($encrypted_data), 2);
+        if (!function_exists('openssl_decrypt')) {
+            return json_decode(base64_decode($encrypted_data), true); // Fallback
+        }
         
+        $method = 'AES-256-CBC';
+        $data = base64_decode($encrypted_data);
+        
+        if (strpos($data, '::') === false) {
+            return json_decode(base64_decode($encrypted_data), true); // Old format fallback
+        }
+        
+        list($encrypted, $iv) = explode('::', $data, 2);
         $decrypted = openssl_decrypt($encrypted, $method, $this->encryption_key, 0, $iv);
         
         return json_decode($decrypted, true);
     }
     
-    // إنشاء توقيع للطلب
+    /**
+     * Create request signature
+     */
     public function create_request_signature($data, $timestamp) {
-        return hash_hmac('sha256', json_encode($data) . $timestamp, $this->encryption_key);
+        return hash_hmac('sha256', wp_json_encode($data) . $timestamp, $this->encryption_key);
     }
     
-    // تسجيل محاولات الاختراق
+    /**
+     * Log security events
+     */
     public function log_security_event($event_type, $details) {
         $log_entry = array(
             'timestamp' => current_time('mysql'),
@@ -174,24 +236,26 @@ class Cross_Site_Cart_Security {
             'details' => $details
         );
         
-        $existing_logs = get_option('cross_site_security_logs', array());
+        $existing_logs = get_option('cross_site_cart_security_logs', array());
         array_unshift($existing_logs, $log_entry);
         
-        // الاحتفاظ بآخر 1000 log entry فقط
+        // Keep only last 1000 entries
         if (count($existing_logs) > 1000) {
             $existing_logs = array_slice($existing_logs, 0, 1000);
         }
         
-        update_option('cross_site_security_logs', $existing_logs);
+        update_option('cross_site_cart_security_logs', $existing_logs);
     }
     
-    // فحص وجود محاولات اختراق
+    /**
+     * Detect suspicious activity
+     */
     public function detect_suspicious_activity() {
         $client_ip = $this->get_client_ip();
-        $logs = get_option('cross_site_security_logs', array());
+        $logs = get_option('cross_site_cart_security_logs', array());
         
         $recent_failures = 0;
-        $time_threshold = time() - 3600; // آخر ساعة
+        $time_threshold = time() - 3600; // Last hour
         
         foreach ($logs as $log) {
             if ($log['ip_address'] === $client_ip && 
@@ -201,103 +265,110 @@ class Cross_Site_Cart_Security {
             }
         }
         
-        return $recent_failures > 10; // أكثر من 10 محاولات فاشلة في الساعة
+        return $recent_failures > 10; // More than 10 failures in an hour
     }
     
-    // حظر IP مؤقتاً
+    /**
+     * Temporarily ban IP
+     */
     public function temporary_ban_ip($ip, $duration = 3600) {
-        $banned_ips = get_option('cross_site_banned_ips', array());
+        $banned_ips = get_option('cross_site_cart_banned_ips', array());
         $banned_ips[$ip] = time() + $duration;
-        update_option('cross_site_banned_ips', $banned_ips);
+        update_option('cross_site_cart_banned_ips', $banned_ips);
         
         $this->log_security_event('ip_banned', array('ip' => $ip, 'duration' => $duration));
     }
     
-    // فحص إذا كان IP محظور
+    /**
+     * Check if IP is banned
+     */
     public function is_ip_banned($ip) {
-        $banned_ips = get_option('cross_site_banned_ips', array());
+        $banned_ips = get_option('cross_site_cart_banned_ips', array());
         
         if (isset($banned_ips[$ip])) {
             if ($banned_ips[$ip] > time()) {
                 return true;
             } else {
-                // إزالة الحظر المنتهي الصلاحية
+                // Remove expired ban
                 unset($banned_ips[$ip]);
-                update_option('cross_site_banned_ips', $banned_ips);
+                update_option('cross_site_cart_banned_ips', $banned_ips);
             }
         }
         
         return false;
     }
+    
+    /**
+     * Get security statistics
+     */
+    public function get_security_stats() {
+        $logs = get_option('cross_site_cart_security_logs', array());
+        $banned_ips = get_option('cross_site_cart_banned_ips', array());
+        
+        $stats = array(
+            'total_events' => count($logs),
+            'banned_ips' => count($banned_ips),
+            'recent_events' => 0
+        );
+        
+        $time_threshold = time() - (24 * 3600); // Last 24 hours
+        
+        foreach ($logs as $log) {
+            if (strtotime($log['timestamp']) > $time_threshold) {
+                $stats['recent_events']++;
+            }
+        }
+        
+        return $stats;
+    }
 }
 
-// تشغيل كلاس الأمان
-new Cross_Site_Cart_Security();
+// Don't instantiate here - let the main plugin handle it
 
-// إضافة middleware للحماية من CSRF
-add_action('init', 'cross_site_csrf_protection');
-function cross_site_csrf_protection() {
+// CSRF Protection
+add_action('init', 'cross_site_cart_csrf_protection');
+function cross_site_cart_csrf_protection() {
     if (!session_id()) {
         session_start();
     }
     
-    if (!isset($_SESSION['csrf_token'])) {
-        $_SESSION['csrf_token'] = wp_generate_password(32, false);
+    if (!isset($_SESSION['cross_site_csrf_token'])) {
+        $_SESSION['cross_site_csrf_token'] = wp_generate_password(32, false);
     }
 }
 
-// فحص CSRF Token
-function verify_csrf_token($token) {
-    return isset($_SESSION['csrf_token']) && hash_equals($_SESSION['csrf_token'], $token);
+/**
+ * Verify CSRF token
+ */
+function cross_site_cart_verify_csrf_token($token) {
+    return isset($_SESSION['cross_site_csrf_token']) && 
+           hash_equals($_SESSION['cross_site_csrf_token'], $token);
 }
 
-// إضافة حماية ضد SQL Injection
-add_filter('cross_site_sanitize_input', 'cross_site_sanitize_sql_input');
-function cross_site_sanitize_sql_input($input) {
-    global $wpdb;
-    
-    if (is_array($input)) {
-        return array_map('cross_site_sanitize_sql_input', $input);
+/**
+ * Additional security headers
+ */
+add_action('send_headers', 'cross_site_cart_additional_security_headers');
+function cross_site_cart_additional_security_headers() {
+    if (!headers_sent()) {
+        header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
+        header('Content-Security-Policy: default-src \'self\'; script-src \'self\' \'unsafe-inline\'; style-src \'self\' \'unsafe-inline\';');
+        header('X-Permitted-Cross-Domain-Policies: none');
+    }
+}
+
+/**
+ * Monitor failed login attempts
+ */
+add_action('wp_login_failed', 'cross_site_cart_monitor_failed_logins');
+function cross_site_cart_monitor_failed_logins($username) {
+    // Only log if our plugin is active
+    if (!Cross_Site_Cart_Plugin::get_option('enabled')) {
+        return;
     }
     
-    return $wpdb->prepare('%s', $input);
-}
-
-// حماية ضد XSS
-function cross_site_sanitize_output($output) {
-    if (is_array($output)) {
-        return array_map('cross_site_sanitize_output', $output);
-    }
-    
-    return htmlspecialchars($output, ENT_QUOTES, 'UTF-8');
-}
-
-// فلترة المدخلات
-add_filter('cross_site_filter_input', 'cross_site_comprehensive_input_filter');
-function cross_site_comprehensive_input_filter($input) {
-    // إزالة المحارف الخطيرة
-    $dangerous_chars = array('<script', '</script', 'javascript:', 'vbscript:', 'onload=', 'onerror=');
-    
-    foreach ($dangerous_chars as $char) {
-        $input = str_ireplace($char, '', $input);
-    }
-    
-    // تنظيف HTML
-    $input = wp_kses($input, array(
-        'a' => array('href' => array(), 'title' => array()),
-        'br' => array(),
-        'em' => array(),
-        'strong' => array(),
-        'p' => array()
-    ));
-    
-    return trim($input);
-}
-
-// مراقبة محاولات الوصول المشبوهة
-add_action('wp_login_failed', 'cross_site_monitor_failed_logins');
-function cross_site_monitor_failed_logins($username) {
     $security = new Cross_Site_Cart_Security();
+    $security->init_security();
     $security->log_security_event('login_failed', array('username' => $username));
     
     if ($security->detect_suspicious_activity()) {
@@ -305,49 +376,23 @@ function cross_site_monitor_failed_logins($username) {
     }
 }
 
-// إضافة headers أمان إضافية
-add_action('send_headers', 'cross_site_additional_security_headers');
-function cross_site_additional_security_headers() {
-    header('Strict-Transport-Security: max-age=31536000; includeSubDomains');
-    header('Content-Security-Policy: default-src \'self\'; script-src \'self\' \'unsafe-inline\'; style-src \'self\' \'unsafe-inline\';');
-    header('X-Permitted-Cross-Domain-Policies: none');
-}
-
-// فحص التحديثات الأمنية
-add_action('wp_version_check', 'cross_site_security_updates_check');
-function cross_site_security_updates_check() {
-    $current_version = get_option('cross_site_cart_version', '1.0.0');
-    $latest_version = '1.0.0'; // يتم جلبها من الخادم
-    
-    if (version_compare($current_version, $latest_version, '<')) {
-        add_action('admin_notices', function() {
-            echo '<div class="notice notice-warning"><p>Cross-Site Cart: A security update is available. Please update immediately.</p></div>';
-        });
-    }
-}
-
-// تنظيف البيانات التلقائي
-add_action('wp', 'schedule_cross_site_security_cleanup');
-function schedule_cross_site_security_cleanup() {
-    if (!wp_next_scheduled('cross_site_security_cleanup')) {
-        wp_schedule_event(time(), 'daily', 'cross_site_security_cleanup');
-    }
-}
-
-add_action('cross_site_security_cleanup', 'cross_site_cleanup_security_data');
-function cross_site_cleanup_security_data() {
-    // تنظيف السجلات القديمة
-    $logs = get_option('cross_site_security_logs', array());
-    $cutoff_time = time() - (30 * 24 * 3600); // 30 يوم
+/**
+ * Cleanup old security data
+ */
+add_action('cross_site_cart_cleanup', 'cross_site_cart_cleanup_security_data');
+function cross_site_cart_cleanup_security_data() {
+    // Clean old security logs (30 days)
+    $logs = get_option('cross_site_cart_security_logs', array());
+    $cutoff_time = time() - (30 * DAY_IN_SECONDS);
     
     $logs = array_filter($logs, function($log) use ($cutoff_time) {
         return strtotime($log['timestamp']) > $cutoff_time;
     });
     
-    update_option('cross_site_security_logs', $logs);
+    update_option('cross_site_cart_security_logs', $logs);
     
-    // تنظيف IPs المحظورة المنتهية الصلاحية
-    $banned_ips = get_option('cross_site_banned_ips', array());
+    // Clean expired IP bans
+    $banned_ips = get_option('cross_site_cart_banned_ips', array());
     $current_time = time();
     
     foreach ($banned_ips as $ip => $ban_time) {
@@ -356,99 +401,5 @@ function cross_site_cleanup_security_data() {
         }
     }
     
-    update_option('cross_site_banned_ips', $banned_ips);
+    update_option('cross_site_cart_banned_ips', $banned_ips);
 }
-
-// إضافة صفحة إعدادات الأمان في لوحة التحكم
-add_action('admin_menu', 'cross_site_security_admin_menu');
-function cross_site_security_admin_menu() {
-    add_submenu_page(
-        'cross-site-cart',
-        'Security Settings',
-        'Security',
-        'manage_options',
-        'cross-site-security',
-        'cross_site_security_admin_page'
-    );
-}
-
-function cross_site_security_admin_page() {
-    if (isset($_POST['submit'])) {
-        $allowed_ips = array_map('trim', explode("\n", $_POST['allowed_ips']));
-        $rate_limit = intval($_POST['rate_limit']);
-        
-        update_option('cross_site_allowed_ips', array_filter($allowed_ips));
-        update_option('cross_site_rate_limit', $rate_limit);
-        
-        echo '<div class="notice notice-success"><p>Security settings saved!</p></div>';
-    }
-    
-    $allowed_ips = implode("\n", get_option('cross_site_allowed_ips', array()));
-    $rate_limit = get_option('cross_site_rate_limit', 100);
-    $logs = get_option('cross_site_security_logs', array());
-    ?>
-    <div class="wrap">
-        <h1>Cross-Site Cart Security Settings</h1>
-        
-        <form method="post">
-            <table class="form-table">
-                <tr>
-                    <th scope="row">Allowed IP Addresses</th>
-                    <td>
-                        <textarea name="allowed_ips" rows="10" cols="50" class="regular-text"><?php echo esc_textarea($allowed_ips); ?></textarea>
-                        <p class="description">One IP address per line. Leave empty to allow all IPs.</p>
-                    </td>
-                </tr>
-                <tr>
-                    <th scope="row">Rate Limit (requests per hour)</th>
-                    <td><input type="number" name="rate_limit" value="<?php echo esc_attr($rate_limit); ?>" min="1" max="1000" /></td>
-                </tr>
-            </table>
-            <?php submit_button(); ?>
-        </form>
-        
-        <h2>Security Logs</h2>
-        <table class="wp-list-table widefat fixed striped">
-            <thead>
-                <tr>
-                    <th>Timestamp</th>
-                    <th>Event Type</th>
-                    <th>IP Address</th>
-                    <th>Details</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach (array_slice($logs, 0, 50) as $log): ?>
-                <tr>
-                    <td><?php echo esc_html($log['timestamp']); ?></td>
-                    <td><?php echo esc_html($log['event_type']); ?></td>
-                    <td><?php echo esc_html($log['ip_address']); ?></td>
-                    <td><?php echo esc_html(json_encode($log['details'])); ?></td>
-                </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-    </div>
-    <?php
-}
-
-// إضافة تنبيهات أمنية في لوحة التحكم
-add_action('admin_notices', 'cross_site_security_admin_notices');
-function cross_site_security_admin_notices() {
-    $logs = get_option('cross_site_security_logs', array());
-    $recent_attacks = 0;
-    $time_threshold = time() - 3600; // آخر ساعة
-    
-    foreach ($logs as $log) {
-        if (strtotime($log['timestamp']) > $time_threshold && 
-            in_array($log['event_type'], array('failed_auth', 'rate_limit_exceeded', 'ip_banned'))) {
-            $recent_attacks++;
-        }
-    }
-    
-    if ($recent_attacks > 5) {
-        echo '<div class="notice notice-error"><p><strong>Security Alert:</strong> ' . $recent_attacks . ' suspicious activities detected in the last hour.</p></div>';
-    }
-}
-
-?>
